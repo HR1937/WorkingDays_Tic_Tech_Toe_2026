@@ -90,11 +90,17 @@ app.use("/webhooks", require("./routes/webhooks/jira"));
 app.use("/webhooks", require("./routes/webhooks/github"));
 app.use("/api/admin", require("./routes/admin"));
 // Serve frontend workflow builder for authenticated admin users
+// Serve frontend workflow builder for ANY authenticated user (not just admins)
 app.get("/workflow-builder", (req, res) => {
-  if (!req.session?.token || !req.session?.isAdmin) {
+  // ✅ Allow any authenticated user (admin or not) to access builder
+  if (!req.session?.token || !req.session?.cloudId) {
     return res.redirect("/login");
   }
-  res.sendFile(path.join(__dirname, "public", "workflow-builder.html"));
+
+  // ✅ Pass user role to frontend for UI conditional rendering
+  res.sendFile(path.join(__dirname, "public", "workflow-builder.html"), {
+    userRole: req.session.isAdmin ? "admin" : "member",
+  });
 });
 
 // Catch-all for SPA routing (if you expand frontend later)

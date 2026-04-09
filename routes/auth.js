@@ -1,5 +1,7 @@
 const express = require("express");
 const axios = require("axios");
+// ADD THIS LINE at the top with your other requires:
+const { requireAuth } = require("../middleware/auth");
 const { v4: uuidv4 } = require("uuid");
 const { collections, getUserRef } = require("../config/firebase");
 const {
@@ -37,22 +39,33 @@ router.get("/login", (req, res) => {
 });
 
 // OAuth callback handler
+// ================= CALLBACK =================
 router.get("/callback", async (req, res) => {
   try {
     const { code, error, error_description } = req.query;
 
     if (error) {
       logger.error("OAuth error:", error, error_description);
-      return res
-        .status(400)
-        .send(`Authentication failed: ${error_description || error}`);
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html><head><title>Auth Failed</title>
+        <script src="https://cdn.tailwindcss.com"></script></head>
+        <body class="bg-gray-50 min-h-screen flex items-center justify-center">
+          <div class="bg-white rounded-xl shadow p-8 max-w-md text-center">
+            <div class="text-red-500 text-4xl mb-4">❌</div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">Authentication Failed</h2>
+            <p class="text-gray-600 mb-4">${error_description || error}</p>
+            <a href="/login" class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">Try Again</a>
+          </div>
+        </body></html>
+      `);
     }
 
     if (!code) {
       return res.status(400).send("Missing authorization code");
     }
 
-    // Exchange code for tokens
+    // Exchange code for tokens (your existing code)
     const tokenResponse = await axios.post(`${JIRA_AUTH}/oauth/token`, {
       grant_type: "authorization_code",
       client_id: process.env.JIRA_CLIENT_ID,
@@ -62,53 +75,85 @@ router.get("/callback", async (req, res) => {
     });
 
     const { access_token, refresh_token, expires_in } = tokenResponse.data;
-
-    // Get accessible resources (cloud instances)
     const resources = await getAccessibleResources(access_token);
 
     if (!resources?.length) {
       return res.send(`
-        <h2>⚠️ No Jira Projects Found</h2>
-        <p>Your account doesn't have access to any Jira Cloud sites.</p>
-        <p><a href="/login">Try again</a> or contact your Jira admin.</p>
+        <!DOCTYPE html>
+        <html><head><title>No Projects</title>
+        <script src="https://cdn.tailwindcss.com"></script></head>
+        <body class="bg-gray-50 min-h-screen flex items-center justify-center">
+          <div class="bg-white rounded-xl shadow p-8 max-w-md text-center">
+            <div class="text-yellow-500 text-4xl mb-4">⚠️</div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">No Jira Projects Found</h2>
+            <p class="text-gray-600 mb-4">Your account doesn't have access to any Jira Cloud sites.</p>
+            <a href="/login" class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">Try Different Account</a>
+          </div>
+        </body></html>
       `);
     }
 
-    // Store tokens in session (encrypt in production)
+    // Store tokens in session
     req.session.token = access_token;
     req.session.refreshToken = refresh_token;
     req.session.tokenExpiry = Date.now() + expires_in * 1000;
     req.session.sites = resources;
+    req.session.userId = uuidv4();
 
-    // Generate session user ID
-    const sessionUserId = uuidv4();
-    req.session.userId = sessionUserId;
-
-    // Show site selection
+    // ✅ PROFESSIONAL SITE SELECTION UI
     let html = `
       <!DOCTYPE html>
-      <html><head><title>Select Jira Site</title>
-      <style>body{font-family:system-ui;padding:2rem;max-width:600px;margin:0 auto}
-      .site{padding:1rem;margin:0.5rem 0;border:1px solid #ddd;border-radius:8px;cursor:pointer}
-      .site:hover{border-color:#3b82f6;background:#f8fafc}
-      .selected{border-color:#3b82f6;background:#eff6ff}</style></head>
-      <body>
-      <h2>🔐 Select Your Jira Site</h2>
-      <form method="POST" action="/select-site">
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>Select Jira Site | Agentic Workflow</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <style>body{font-family:'Inter',system-ui}</style>
+      </head>
+      <body class="bg-gradient-to-br from-blue-50 to-indigo-50 min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-lg w-full">
+          <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white text-2xl font-bold mb-4">
+              🔄
+            </div>
+            <h1 class="text-2xl font-bold text-gray-900">Select Your Jira Site</h1>
+            <p class="text-gray-600 mt-2">Choose the Jira instance containing your project</p>
+          </div>
+          
+          <form method="POST" action="/select-site" class="space-y-3">
     `;
 
     resources.forEach((site, index) => {
       html += `
-        <label class="site">
-          <input type="radio" name="siteIndex" value="${index}" ${index === 0 ? "checked" : ""}>
-          <strong>${site.name}</strong><br>
-          <small>${site.url}</small>
+        <label class="flex items-start p-4 border-2 border-gray-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition group">
+          <input type="radio" name="siteIndex" value="${index}" class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500" ${index === 0 ? "checked" : ""}>
+          <div class="ml-4 flex-1">
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-gray-900 group-hover:text-blue-700">${site.name}</span>
+              <span class="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">${site.id.slice(0, 8)}...</span>
+            </div>
+            <p class="text-sm text-gray-500 mt-1 break-all">${site.url}</p>
+          </div>
         </label>
       `;
     });
 
-    html += `<button type="submit" style="margin-top:1rem;padding:0.75rem 1.5rem;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">Continue</button>
-      </form></body></html>`;
+    html += `
+            <button type="submit" class="w-full mt-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white py-3 px-4 rounded-xl font-semibold transition shadow-lg hover:shadow-xl">
+              Continue to Project Selection
+            </button>
+          </form>
+          
+          <p class="text-xs text-gray-400 text-center mt-6">
+            🔐 Your credentials are encrypted and never stored permanently
+          </p>
+        </div>
+      </body>
+      </html>
+    `;
 
     res.send(html);
   } catch (error) {
@@ -119,7 +164,6 @@ router.get("/callback", async (req, res) => {
     res.status(500).send("Authentication failed. Please try again.");
   }
 });
-
 // Handle site selection
 router.post("/select-site", async (req, res) => {
   try {
@@ -167,21 +211,24 @@ router.post("/select-site", async (req, res) => {
 });
 
 // Project selection page
+// ================= PROJECT LIST =================
 router.get("/projects", async (req, res) => {
   try {
-    if (!req.session?.token || !req.session?.cloudId) {
+    const { token, cloudId } = req.session;
+
+    if (!token || !cloudId) {
       return res.redirect("/login");
     }
 
-    const jiraClient = createJiraClient(req.session.token);
+    const jiraClient = createJiraClient(token);
 
-    // Fetch projects user can administer
+    // ✅ FETCH ALL PROJECTS USER CAN ACCESS (not just admin)
     const response = await jiraClient.get(
-      `/ex/jira/${req.session.cloudId}/rest/api/3/project/search`,
+      `/ex/jira/${cloudId}/rest/api/3/project/search`,
       {
         params: {
-          permissions: "ADMINISTER_PROJECTS",
-          expand: "description,lead,url,projectKeys",
+          expand: "description,lead,url",
+          maxResults: 50,
         },
       },
     );
@@ -190,41 +237,90 @@ router.get("/projects", async (req, res) => {
 
     if (!projects.length) {
       return res.send(`
-        <h2>⚠️ No Admin Projects Found</h2>
-        <p>You don't have admin access to any Jira projects.</p>
-        <p>Contact your Jira administrator to get project admin permissions.</p>
-        <p><a href="/login">Switch account</a></p>
+        <!DOCTYPE html>
+        <html><head><title>No Projects</title>
+        <script src="https://cdn.tailwindcss.com"></script></head>
+        <body class="bg-gray-50 min-h-screen flex items-center justify-center">
+          <div class="bg-white rounded-xl shadow p-8 max-w-md text-center">
+            <div class="text-yellow-500 text-4xl mb-4">📁</div>
+            <h2 class="text-xl font-bold text-gray-900 mb-2">No Projects Found</h2>
+            <p class="text-gray-600 mb-4">You don't have access to any Jira projects in this site.</p>
+            <a href="/login" class="inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium">Switch Account</a>
+          </div>
+        </body></html>
       `);
     }
 
+    // ✅ PROFESSIONAL PROJECT SELECTION UI
     let html = `
       <!DOCTYPE html>
-      <html><head><title>Select Project</title>
-      <style>body{font-family:system-ui;padding:2rem;max-width:600px;margin:0 auto}
-      .project{padding:1rem;margin:0.5rem 0;border:1px solid #ddd;border-radius:8px;cursor:pointer}
-      .project:hover{border-color:#3b82f6;background:#f8fafc}</style></head>
-      <body>
-      <h2>📁 Select Project to Configure</h2>
-      <p style="color:#666;margin-bottom:1.5rem">Only projects where you have <strong>Admin</strong> permissions are shown.</p>
-      <form method="POST" action="/validate">
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>Select Project | Agentic Workflow</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <style>body{font-family:'Inter',system-ui}</style>
+      </head>
+      <body class="bg-gradient-to-br from-blue-50 to-indigo-50 min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-xl p-8 max-w-2xl w-full">
+          <div class="text-center mb-8">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white text-2xl font-bold mb-4">
+              📋
+            </div>
+            <h1 class="text-2xl font-bold text-gray-900">Select Your Project</h1>
+            <p class="text-gray-600 mt-2">Choose the Jira project to configure workflows for</p>
+          </div>
+          
+          <form method="POST" action="/validate" class="space-y-3 max-h-96 overflow-y-auto pr-2">
     `;
 
     projects.forEach((project) => {
+      const key = project.key;
+      const name = project.name;
+      const desc = project.description || "No description";
+      const lead = project.lead?.displayName || "Unassigned";
+
       html += `
-        <label class="project">
-          <input type="radio" name="projectKey" value="${project.key}" required>
-          <strong>${project.key}</strong> - ${project.name}<br>
-          <small style="color:#666">${project.description || "No description"}</small>
+        <label class="flex items-start p-4 border-2 border-gray-200 rounded-xl hover:border-blue-300 hover:bg-blue-50 cursor-pointer transition group">
+          <input type="radio" name="projectKey" value="${key}" class="mt-1 h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500" required>
+          <div class="ml-4 flex-1 min-w-0">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="font-mono font-semibold text-gray-900 bg-gray-100 px-2 py-0.5 rounded text-sm">${key}</span>
+                <span class="font-medium text-gray-900 group-hover:text-blue-700 truncate">${name}</span>
+              </div>
+              <span class="text-xs text-gray-400">▼</span>
+            </div>
+            <p class="text-sm text-gray-500 mt-1 line-clamp-2">${desc}</p>
+            <p class="text-xs text-gray-400 mt-2">Lead: ${lead}</p>
+          </div>
         </label>
       `;
     });
 
-    html += `<button type="submit" style="margin-top:1rem;padding:0.75rem 1.5rem;background:#3b82f6;color:white;border:none;border-radius:6px;cursor:pointer">Configure Project</button>
-      </form>
-      <p style="margin-top:2rem;font-size:0.9rem;color:#666">
-        🔐 Your credentials are stored securely and only used for API calls on your behalf.
-      </p>
-      </body></html>`;
+    html += `
+          </form>
+          
+          <button type="submit" form="projectsForm" class="w-full mt-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white py-3 px-4 rounded-xl font-semibold transition shadow-lg hover:shadow-xl">
+            Configure Project
+          </button>
+          
+          <p class="text-xs text-gray-400 text-center mt-6">
+            🔐 Only projects you have access to are shown
+          </p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Fix: Add form ID for submit button
+    html = html.replace(
+      '<form method="POST" action="/validate"',
+      '<form id="projectsForm" method="POST" action="/validate"',
+    );
 
     res.send(html);
   } catch (error) {
@@ -237,6 +333,7 @@ router.get("/projects", async (req, res) => {
 });
 
 // Validate project and check permissions
+// ================= VALIDATE =================
 router.post("/validate", async (req, res) => {
   try {
     const { token, cloudId, user } = req.session;
@@ -248,34 +345,252 @@ router.post("/validate", async (req, res) => {
 
     const jiraClient = createJiraClient(token);
 
-    // Verify admin permission (double-check)
-    const isAdmin = await checkProjectAdmin(jiraClient, cloudId, projectKey);
-
-    if (!isAdmin) {
-      return res
-        .status(403)
-        .send(`You don't have admin access to project ${projectKey}`);
+    // ✅ CHECK: Is user admin? (for workflow CRUD permissions)
+    let isAdmin = false;
+    try {
+      const adminRes = await jiraClient.get(
+        `/ex/jira/${cloudId}/rest/api/3/mypermissions`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            permissions: "ADMINISTER_PROJECTS",
+            projectKey: projectKey,
+          },
+        },
+      );
+      isAdmin =
+        adminRes.data.permissions.ADMINISTER_PROJECTS?.havePermission || false;
+    } catch (e) {
+      logger.debug("Admin check failed (non-admin user):", e.message);
+      isAdmin = false; // ✅ Non-admins can still use the app (view-only)
     }
 
-    // Update session with project context
+    // ✅ CHECK: Can user assign issues? (for receiving notifications)
+    let canAssign = false;
+    try {
+      const permRes = await jiraClient.get(
+        `/ex/jira/${cloudId}/rest/api/3/mypermissions`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          params: {
+            permissions: "ASSIGN_ISSUES",
+            issueKey: `${projectKey}-1`, // Test with first issue
+          },
+        },
+      );
+      canAssign =
+        permRes.data.permissions.ASSIGN_ISSUES?.havePermission || false;
+    } catch (e) {
+      logger.debug("Assign check failed:", e.message);
+      canAssign = false;
+    }
+
+    // ✅ SAVE USER TO FIRESTORE (for ANY authenticated user)
+    await getUserRef(req.session.userId).set(
+      {
+        jiraAccountId: user.accountId,
+        email: user.emailAddress,
+        displayName: user.displayName,
+        jiraCloudId: cloudId,
+        jiraProjectKey: projectKey,
+        jiraBaseUrl: selected.url, // from earlier in flow
+        isAdmin: isAdmin, // ✅ Store role for permission checks
+        canAssign: canAssign,
+        lastLogin: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }, // ✅ Update existing, don't overwrite
+    );
+
+    // ✅ UPDATE SESSION (for ANY user, not just admins)
     req.session.projectKey = projectKey;
-    req.session.isAdmin = true;
+    req.session.isAdmin = isAdmin; // ✅ Store for route middleware
+    req.session.canAssign = canAssign;
 
-    // Update Firestore with project association
-    await getUserRef(req.session.userId).update({
-      currentProjectKey: projectKey,
-      isAdmin: true,
-      updatedAt: new Date(),
-    });
-
-    // Redirect to workflow builder
-    res.redirect("/workflow-builder");
+    // ✅ REDIRECT TO WORKFLOW BUILDER (for ANY authenticated user)
+    // ✅ REDIRECT based on role:
+    // - Admins: Go straight to workflow builder
+    // - Non-admins: Go to profile setup first (to collect contact info)
+    if (isAdmin) {
+      res.redirect("/workflow-builder");
+    } else {
+      res.redirect("/profile-setup"); // ✅ Non-admins set up contact info first
+    }
   } catch (error) {
     logger.error("Project validation failed:", error.message);
     res.status(500).send("Failed to validate project access");
   }
 });
 
+// ================= PROFILE SETUP (for ANY user) =================
+router.get("/profile-setup", requireAuth, async (req, res) => {
+  try {
+    const { projectKey, isAdmin, canAssign } = req.session;
+
+    // Fetch existing profile from Firestore
+    const userDoc = await getUserRef(req.session.userId).get();
+    const profile = userDoc.exists ? userDoc.data() : {};
+
+    // Determine what to show based on role
+    const showWorkflowAccess = isAdmin; // Only admins can create/edit workflows
+    const showNotificationSetup = canAssign || isAdmin; // Assignees + admins receive notifications
+
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <title>Profile Setup | Agentic Workflow</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+      </head>
+      <body class="bg-gray-50 min-h-screen">
+        <div class="max-w-2xl mx-auto px-4 py-12">
+          <div class="bg-white rounded-xl shadow p-8">
+            <h1 class="text-2xl font-bold text-gray-900 mb-2">Complete Your Profile</h1>
+            <p class="text-gray-600 mb-6">Project: <strong>${projectKey}</strong> • Role: ${isAdmin ? "Admin" : "Member"}</p>
+            
+            <!-- Contact Info (for ALL users who can receive notifications) -->
+            ${
+              showNotificationSetup
+                ? `
+            <div class="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <h2 class="font-medium text-blue-900 mb-3">🔔 Notification Preferences</h2>
+              <p class="text-sm text-blue-700 mb-4">
+                Provide your contact details to receive task assignments and updates.
+              </p>
+              
+              <form id="contactForm" class="space-y-4">
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Personal Slack User ID
+                  </label>
+                  <input type="text" name="slackUserId" 
+                         value="${profile.contact?.slackUserId || ""}"
+                         placeholder="U12345678"
+                         class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                         pattern="^U[A-Z0-9]+$">
+                  <p class="text-xs text-gray-500 mt-1">
+                    Find this in Slack: Click your profile → More → Copy User ID
+                  </p>
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">
+                    Mobile Number (for SMS alerts)
+                  </label>
+                  <input type="tel" name="phoneNumber" 
+                         value="${profile.contact?.phoneNumber ? "••••••••••" : ""}"
+                         placeholder="+1234567890"
+                         class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                         pattern="^\\+?[1-9]\\d{1,14}$">
+                  <p class="text-xs text-gray-500 mt-1">
+                    E.164 format: +[country code][number] (e.g., +14155552671)
+                  </p>
+                </div>
+                
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 mb-1">
+                    GitHub Username (for auto-branch creation)
+                  </label>
+                  <input type="text" name="githubUsername" 
+                         value="${profile.contact?.githubUsername || ""}"
+                         placeholder="your-github-handle"
+                         class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                         pattern="^[a-zA-Z0-9]([a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$">
+                </div>
+                
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-medium transition">
+                  Save Contact Info
+                </button>
+              </form>
+              <div id="contactSuccess" class="hidden mt-3 p-3 bg-green-50 text-green-700 rounded-lg text-sm">
+                ✅ Contact info saved successfully!
+              </div>
+            </div>
+            `
+                : `
+            <div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+              <p class="text-sm text-gray-600">
+                You'll receive notifications via your Jira account. 
+                <a href="/profile-setup" class="text-blue-600 hover:underline">Update preferences</a>
+              </p>
+            </div>
+            `
+            }
+            
+            <!-- Workflow Access (admin-only) -->
+            ${
+              showWorkflowAccess
+                ? `
+            <div class="p-4 bg-green-50 border border-green-200 rounded-lg">
+              <h2 class="font-medium text-green-900 mb-2">✅ Admin Access Granted</h2>
+              <p class="text-sm text-green-700">
+                You can create and manage workflows for project <strong>${projectKey}</strong>.
+              </p>
+              <a href="/workflow-builder" class="inline-block mt-3 text-green-800 font-medium hover:underline">
+                Go to Workflow Builder →
+              </a>
+            </div>
+            `
+                : `
+            <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <h2 class="font-medium text-yellow-900 mb-2">👁️ View-Only Access</h2>
+              <p class="text-sm text-yellow-700">
+                You can view workflows and receive notifications, but cannot create or edit them. 
+                Contact a project admin to request edit access.
+              </p>
+            </div>
+            `
+            }
+          </div>
+        </div>
+        
+        <script>
+          // Save contact info via API
+          document.getElementById('contactForm')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const btn = form.querySelector('button[type="submit"]');
+            const success = document.getElementById('contactSuccess');
+            
+            btn.disabled = true;
+            btn.textContent = 'Saving...';
+            
+            try {
+              const res = await fetch('/api/admin/profile', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  slackUserId: form.slackUserId.value || null,
+                  phoneNumber: form.phoneNumber.value || null,
+                  githubUsername: form.githubUsername.value || null
+                })
+              });
+              
+              const result = await res.json();
+              if (result.success) {
+                success.classList.remove('hidden');
+                form.reset();
+              } else {
+                alert('Failed to save: ' + result.error);
+              }
+            } catch (err) {
+              alert('Network error: ' + err.message);
+            } finally {
+              btn.disabled = false;
+              btn.textContent = 'Save Contact Info';
+            }
+          });
+        </script>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    logger.error("Profile setup failed:", error);
+    res.status(500).send("Failed to load profile setup");
+  }
+});
 // Logout
 router.get("/logout", (req, res) => {
   req.session.destroy((err) => {
