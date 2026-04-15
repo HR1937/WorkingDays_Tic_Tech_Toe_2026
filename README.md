@@ -111,7 +111,6 @@ Admins can generate project health reports covering team performance, sprint sum
 | Runtime | Node.js + Express.js |
 | Database | Firebase Firestore |
 | Authentication | OAuth 2.0 (Jira + Slack) |
-| Encryption | AES-256-CBC (Node crypto) |
 | AI Layer | OpenAI GPT-4o-mini via LangGraph |
 | Agent Framework | LangGraph (LangChain) |
 | Notifications | Slack Web API, Twilio (SMS), Nodemailer (Email) |
